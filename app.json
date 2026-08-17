@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Life OS",
+    "slug": "life-os-app",
+    "version": "0.1.0",
+    "scheme": "lifeos",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.emelgra.lifeos",
+      "supportsTablet": false
+    },
+    "plugins": ["expo-router", "@sentry/react-native/expo"],
+    "experiments": { "typedRoutes": true }
+  }
+}
