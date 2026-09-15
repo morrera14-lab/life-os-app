@@ -11,7 +11,19 @@
       "bundleIdentifier": "com.emelgra.lifeos",
       "supportsTablet": false
     },
-    "plugins": ["expo-router", "@sentry/react-native/expo"],
-    "experiments": { "typedRoutes": true }
+    "plugins": [
+      "expo-router",
+      "@sentry/react-native/expo"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c3beadd8-531b-4106-a6f9-fd7e0e0798cd"
+      }
+    },
+    "owner": "morrera14"
   }
 }
