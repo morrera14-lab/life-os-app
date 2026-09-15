@@ -48,7 +48,7 @@ Deno.serve(async (req: Request) => {
   if (userErr || !userData.user) return json({ error: "unauthenticated" }, 401);
   const userId = userData.user.id;
 
-  let body: { text?: string; domain_id?: string; item_type?: string; due_date?: string | null };
+  let body: { text?: string; today?: string; domain_id?: string; item_type?: string; due_date?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -56,6 +56,9 @@ Deno.serve(async (req: Request) => {
   }
   const text = (body.text ?? "").trim();
   if (!text) return json({ error: "text required" }, 400);
+  // The model has no clock: the app sends its local date so "next Tuesday" resolves
+  // in the user's timezone; UTC is the fallback until profiles carry a timezone.
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(body.today ?? "") ? body.today! : new Date().toISOString().slice(0, 10);
 
   // --- domain list: the only thing the routing call waits on (§4.3 design rule)
   const tDb = performance.now();
@@ -95,7 +98,7 @@ Deno.serve(async (req: Request) => {
   } else {
     const tClaude = performance.now();
     try {
-      result = await classify(apiKey, domains.map((d: Domain) => d.name), text);
+      result = await classify(apiKey, domains.map((d: Domain) => d.name), text, today);
     } catch (e) {
       fallbackReason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     }
@@ -135,25 +138,24 @@ Deno.serve(async (req: Request) => {
   });
 });
 
-async function classify(apiKey: string, domainNames: string[], text: string): Promise<Classification> {
+async function classify(apiKey: string, domainNames: string[], text: string, today: string): Promise<Classification> {
   const client = new Anthropic({ apiKey, timeout: 8_000, maxRetries: 1 });
+  const weekday = new Date(`${today}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" });
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 256,
+    max_tokens: 200,
     system: SYSTEM_PROMPT,
     messages: [{
       role: "user",
       content:
+        `Today is ${weekday} ${today}.\n` +
         `The user's domains are: ${domainNames.join(", ")}.\n` +
         `Classify this capture: "${text}"\n\n` +
-        `Return JSON per the schema:\n` +
-        `- "domain": exactly one name from the list above\n` +
-        `- "alternative_domain": the next-best domain name from the list, or null if nothing else fits\n` +
-        `- "item_type": "task" (actionable, has an implied action) | "note" (thought, reflection, information) | "prayer" (prayer request or spiritual intention)\n` +
-        `- "title": the capture lightly cleaned into a short title (fix typos, keep the user's words, under 12 words)\n` +
-        `- "due_date": ISO date (YYYY-MM-DD) if the text names or clearly implies one, else null\n` +
-        `- "confidence": 0.0–1.0\n\n` +
-        `If the capture fits no domain well, pick the closest and set confidence below 0.6.`,
+        `domain: one name from the list. alternative_domain: next-best name, or null. ` +
+        `item_type: task (actionable) | note (thought, reflection, information) | prayer (prayer request or spiritual intention). ` +
+        `title: the capture lightly cleaned, under 12 words, keep the user's words. ` +
+        `due_date: YYYY-MM-DD if the text names or clearly implies a date relative to today ("Friday", "next Tuesday", "tomorrow"), else null. ` +
+        `confidence: 0.0–1.0; if nothing fits well, pick the closest and set it below 0.6.`,
     }],
     output_config: {
       format: {

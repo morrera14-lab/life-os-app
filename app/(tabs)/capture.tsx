@@ -23,6 +23,12 @@ type RouteResult = {
   latency_ms: number;
 };
 
+// Device-local calendar date, so "Friday" resolves in the user's own day, not UTC's.
+function localISODate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const TYPE_LABEL: Record<RouteResult["item_type"], string> = {
   task: "task",
   note: "note",
@@ -47,7 +53,7 @@ export default function Capture() {
     const capture = text.trim();
     if (!capture || busy) return;
     setBusy(true);
-    const res = await route({ text: capture });
+    const res = await route({ text: capture, today: localISODate() });
     setBusy(false);
     if (!res) return;
     setResult(res);
