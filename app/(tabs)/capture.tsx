@@ -1,7 +1,9 @@
 // Universal Capture — REQ-F03/F04, US-03. One field, one button; the
 // `route_capture` Edge Function (Claude Haiku, vault AI_MANAGEMENT.md §1.2)
 // files the capture into the user's own domains and this screen shows where
-// it went. Low confidence (< 0.6) shows the top choice + one alternative.
+// it went. Low confidence shows the top choice + one alternative — the threshold
+// is server-calibrated per user (Compounding Engine, REQ-F59); the client only
+// trusts `needs_confirmation`, never hardcodes a cutoff.
 import { useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert } from "react-native";
 import { supabase } from "@/lib/supabase";

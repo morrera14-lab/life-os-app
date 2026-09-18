@@ -3,11 +3,27 @@
 // Auth: the caller's Supabase JWT is forwarded to supabase-js, so every read and
 // write runs under the user's own RLS (REQ-NF07). Domains are read per request
 // from the user's `domains` rows — never an enum (REQ-NF08).
+//
+// v4 (APP-049, REQ-F59): the Compounding Engine's first calibration loop. The
+// low-confidence threshold is no longer a constant — it is read from the
+// `assumptions` registry and recalibrated per user from their actual correction
+// rate (routed_by='user' share, exponential smoothing per the Lagos mechanism),
+// and the user's recent re-filings are fed to the classifier as examples so the
+// router learns this user's patterns. Every response reports the calibration it
+// used; the computed value is written back to the registry (own-rows RLS).
 import Anthropic from "npm:@anthropic-ai/sdk@0.125.0";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const MODEL = "claude-haiku-4-5"; // AI_MANAGEMENT §2 — one constant, never scattered
-const LOW_CONFIDENCE = 0.6; // §1.2: below this the app shows the top choice + one alternative
+
+// --- Compounding Engine calibration constants (REQ-F59 documents these) ---
+const THRESHOLD_KEY = "routing.confidence_threshold";
+const BASELINE_THRESHOLD = 0.6; // Day-0 default; also the lazy-seed fallback
+const THRESHOLD_MAX = 0.9;      // picker must never demand near-certainty
+const CORRECTION_GAIN = 0.5;    // target = baseline + gain * correction_rate
+const SMOOTHING_ALPHA = 0.3;    // exponential smoothing toward the target
+const CORRECTION_WINDOW_DAYS = 14;
+const MAX_EXAMPLES = 3;         // corrected examples injected into the prompt
 
 const SYSTEM_PROMPT = `You classify a user's free-text capture into exactly one of their own life
 domains and an entry type. Answer only from the capture text. Never store,
@@ -89,6 +105,11 @@ Deno.serve(async (req: Request) => {
       needs_confirmation: false, fallback: false, timings, latency_ms: Math.round(performance.now() - t0) });
   }
 
+  // --- Compounding Engine: threshold + corrected examples (REQ-F59, APP-049)
+  const tCal = performance.now();
+  const calibration = await loadCalibration(supabase, domains);
+  mark("db_calibration_ms", tCal);
+
   // --- classify (Haiku, structured output; schema enum built per request — REQ-NF08)
   let result: Classification | null = null;
   let fallbackReason: string | null = null;
@@ -98,7 +119,7 @@ Deno.serve(async (req: Request) => {
   } else {
     const tClaude = performance.now();
     try {
-      result = await classify(apiKey, domains.map((d: Domain) => d.name), text, today);
+      result = await classify(apiKey, domains.map((d: Domain) => d.name), text, today, calibration.examples);
     } catch (e) {
       fallbackReason = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
     }
@@ -116,7 +137,8 @@ Deno.serve(async (req: Request) => {
     console.log(JSON.stringify({ event: "route_capture.fallback", reason: fallbackReason, timings }));
     return json({ ...written, domain: target.name, domain_id: target.id, item_type: "note", title: text,
       due_date: null, confidence: 0, alternative: null, needs_confirmation: true, fallback: true,
-      fallback_reason: fallbackReason, timings, latency_ms: Math.round(performance.now() - t0) });
+      fallback_reason: fallbackReason, calibration: calibration.report, timings,
+      latency_ms: Math.round(performance.now() - t0) });
   }
 
   const target = byName.get(result.domain) ?? domains[0];
@@ -126,21 +148,107 @@ Deno.serve(async (req: Request) => {
   const written = await writeItem(supabase, userId, target, result, text, "claude");
   const latency_ms = Math.round(performance.now() - t0);
   console.log(JSON.stringify({ event: "route_capture.ok", model: MODEL, confidence: result.confidence,
-    item_type: result.item_type, timings, latency_ms }));
+    item_type: result.item_type, calibration: calibration.report, timings, latency_ms }));
   return json({
     ...written,
     domain: target.name, domain_id: target.id,
     item_type: result.item_type, title: result.title, due_date: result.due_date,
     confidence: result.confidence,
     alternative: alt ? { domain: alt.name, domain_id: alt.id } : null,
-    needs_confirmation: result.confidence < LOW_CONFIDENCE,
-    fallback: false, timings, latency_ms,
+    needs_confirmation: result.confidence < calibration.threshold,
+    fallback: false, calibration: calibration.report, timings, latency_ms,
   });
 });
 
-async function classify(apiKey: string, domainNames: string[], text: string, today: string): Promise<Classification> {
+// --- Compounding Engine (APP-049 / REQ-F59) ------------------------------------
+// Reads the user's threshold assumption + recent correction history, computes the
+// effective threshold by exponential smoothing (the Lagos mechanism: prediction →
+// actual → narrowed variance), writes the computed value back to the registry,
+// and returns the user's recent re-filings as classifier examples. Every step is
+// best-effort: a calibration failure must never block a capture (§6 spirit).
+
+type CorrectedExample = { capture: string; domain: string; item_type: string };
+type Calibration = {
+  threshold: number;
+  examples: CorrectedExample[];
+  report: { threshold: number; baseline: number; correction_rate: number | null; corrected_examples: number };
+};
+
+// deno-lint-ignore no-explicit-any
+async function loadCalibration(supabase: any, domains: Domain[]): Promise<Calibration> {
+  const fallback: Calibration = {
+    threshold: BASELINE_THRESHOLD,
+    examples: [],
+    report: { threshold: BASELINE_THRESHOLD, baseline: BASELINE_THRESHOLD, correction_rate: null, corrected_examples: 0 },
+  };
+  try {
+    const cutoff = new Date(Date.now() - CORRECTION_WINDOW_DAYS * 86_400_000).toISOString();
+    const byId = new Map<string, string>(domains.map((d) => [d.id, d.name]));
+
+    const [assumptionQ, notesUserQ, tasksUserQ, notesAllQ, tasksAllQ] = await Promise.all([
+      supabase.from("assumptions").select("id,value").eq("key", THRESHOLD_KEY).maybeSingle(),
+      supabase.from("notes").select("raw_capture,content,item_type,domain_id,created_at")
+        .eq("routed_by", "user").gte("created_at", cutoff).order("created_at", { ascending: false }).limit(MAX_EXAMPLES),
+      supabase.from("tasks").select("raw_capture,title,domain_id,created_at")
+        .eq("routed_by", "user").gte("created_at", cutoff).order("created_at", { ascending: false }).limit(MAX_EXAMPLES),
+      supabase.from("notes").select("id", { count: "exact", head: true })
+        .in("routed_by", ["user", "claude"]).gte("created_at", cutoff),
+      supabase.from("tasks").select("id", { count: "exact", head: true })
+        .in("routed_by", ["user", "claude"]).gte("created_at", cutoff),
+      ]);
+
+    // deno-lint-ignore no-explicit-any
+    const userRows: any[] = [...(notesUserQ.data ?? []), ...(tasksUserQ.data ?? [])]
+      // deno-lint-ignore no-explicit-any
+      .sort((a: any, b: any) => (a.created_at < b.created_at ? 1 : -1));
+    const routedTotal = (notesAllQ.count ?? 0) + (tasksAllQ.count ?? 0);
+    const correctedTotal = userRows.length; // capped by MAX_EXAMPLES per table — a floor, honest enough
+    const correctionRate = routedTotal > 0 ? Math.min(1, correctedTotal / routedTotal) : 0;
+
+    const value = (assumptionQ.data?.value ?? {}) as { baseline?: number; computed?: number };
+    const baseline = typeof value.baseline === "number" ? value.baseline : BASELINE_THRESHOLD;
+    const prev = typeof value.computed === "number" ? value.computed : baseline;
+    const target = Math.min(THRESHOLD_MAX, baseline + CORRECTION_GAIN * correctionRate);
+    const computed = Math.round((SMOOTHING_ALPHA * target + (1 - SMOOTHING_ALPHA) * prev) * 100) / 100;
+
+    if (assumptionQ.data?.id) {
+      await supabase.from("assumptions").update({
+        value: {
+          ...value, baseline, computed,
+          inputs: { corrected: correctedTotal, routed: routedTotal,
+            correction_rate: Math.round(correctionRate * 100) / 100, window_days: CORRECTION_WINDOW_DAYS },
+          computed_at: new Date().toISOString(),
+        },
+      }).eq("id", assumptionQ.data.id);
+    }
+
+    const examples: CorrectedExample[] = userRows.slice(0, MAX_EXAMPLES).map((r) => ({
+      capture: String(r.raw_capture ?? r.content ?? r.title ?? "").slice(0, 140),
+      domain: byId.get(r.domain_id) ?? "?",
+      item_type: r.item_type ?? "task",
+    })).filter((e: CorrectedExample) => e.capture && e.domain !== "?");
+
+    return {
+      threshold: computed,
+      examples,
+      report: { threshold: computed, baseline,
+        correction_rate: Math.round(correctionRate * 100) / 100, corrected_examples: examples.length },
+    };
+  } catch (e) {
+    console.log(JSON.stringify({ event: "route_capture.calibration_failed", reason: String(e) }));
+    return fallback;
+  }
+}
+
+async function classify(apiKey: string, domainNames: string[], text: string, today: string,
+  examples: CorrectedExample[] = []): Promise<Classification> {
   const client = new Anthropic({ apiKey, timeout: 8_000, maxRetries: 1 });
   const weekday = new Date(`${today}T12:00:00Z`).toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" });
+  // REQ-F59: the user's own re-filings teach the router this user's patterns.
+  const exampleLines = examples.length
+    ? `The user has previously re-filed these captures themselves — treat their choices as the ground truth for similar captures:\n` +
+      examples.map((e) => `- "${e.capture}" → ${e.domain} (${e.item_type})`).join("\n") + "\n"
+    : "";
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 200,
@@ -150,6 +258,7 @@ async function classify(apiKey: string, domainNames: string[], text: string, tod
       content:
         `Today is ${weekday} ${today}.\n` +
         `The user's domains are: ${domainNames.join(", ")}.\n` +
+        exampleLines +
         `Classify this capture: "${text}"\n\n` +
         `domain: one name from the list. alternative_domain: next-best name, or null. ` +
         `item_type: task (actionable) | note (thought, reflection, information) | prayer (prayer request or spiritual intention). ` +
