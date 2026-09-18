@@ -78,7 +78,7 @@ export default function Domains() {
         Each area of your life has a manager who already knows it. Ask anything.
       </Text>
       {cards.map((d) => (
-        <View key={d.id} style={{ backgroundColor: colors.surface, borderRadius: radii.md, borderWidth: 1, borderColor: colors.goldDeep, padding: spacing.md, marginBottom: spacing.md }}>
+        <TouchableOpacity key={d.id} onPress={() => router.push(`/domain/${d.id}`)} style={{ backgroundColor: colors.surface, borderRadius: radii.md, borderWidth: 1, borderColor: colors.goldDeep, padding: spacing.md, marginBottom: spacing.md }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
             <Text style={{ fontSize: 24 }}>{d.icon ?? "◆"}</Text>
             <View style={{ flex: 1 }}>
@@ -95,7 +95,7 @@ export default function Domains() {
               <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 14, color: colors.bg }}>Ask</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </TouchableOpacity>
       ))}
     </ScrollView>
   );

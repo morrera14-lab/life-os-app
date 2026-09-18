@@ -74,7 +74,7 @@ export default function Home() {
   const router = useRouter();
 
   const load = useCallback(async () => {
-    const [{ data: tasks }, { data: assumptions }] = await Promise.all([
+    const [{ data: tasks }, { data: assumptions }, { data: health }] = await Promise.all([
       supabase
         .from("tasks")
         .select("id,title,due_date,priority,effort_minutes,domain_id")
@@ -84,13 +84,22 @@ export default function Home() {
       supabase
         .from("assumptions")
         .select("key,value")
-        .in("key", ["today.capacity_minutes", "today.default_effort_minutes"]),
+        .in("key", ["today.capacity_minutes", "today.default_effort_minutes", "today.recovery_modulation"]),
+      supabase.from("health_metrics").select("recovery").eq("day", today).maybeSingle(),
     ]);
     const val = (k: string, fallback: number) => {
       const row = (assumptions ?? []).find((a) => a.key === k)?.value as { default?: number; computed?: number } | undefined;
       return row?.computed ?? row?.default ?? fallback;
     };
-    const budget = val("today.capacity_minutes", 180);
+    // PARITY-08: today's recovery (declared or synced) scales the budget — the
+    // bands live in the registry, not here.
+    const mod = (assumptions ?? []).find((a) => a.key === "today.recovery_modulation")?.value as
+      { low_below?: number; low_factor?: number; mid_below?: number; mid_factor?: number } | undefined;
+    const recovery = (health as { recovery: number | null } | null)?.recovery ?? null;
+    const factor = recovery == null || !mod ? 1
+      : recovery < (mod.low_below ?? 34) ? (mod.low_factor ?? 0.6)
+      : recovery < (mod.mid_below ?? 67) ? (mod.mid_factor ?? 0.8) : 1;
+    const budget = Math.round(val("today.capacity_minutes", 180) * factor);
     const defaultEffort = val("today.default_effort_minutes", 30);
     const picked: Task[] = [];
     let spent = 0;

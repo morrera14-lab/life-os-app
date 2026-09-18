@@ -13,7 +13,8 @@
     },
     "plugins": [
       "expo-router",
-      "@sentry/react-native/expo"
+      "@sentry/react-native/expo",
+      "expo-speech-recognition"
     ],
     "experiments": {
       "typedRoutes": true

@@ -3,8 +3,29 @@
 // server-calibrated needs_confirmation, keep/move correction) renders as the
 // full Capture screen AND as the compact bar on Home — REQ-F03's "accessible
 // from any screen" stops being a tab you must switch to.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert } from "react-native";
+
+// Voice capture — APP-003 on ADR-007's stack: iOS on-device speech via
+// expo-speech-recognition (SFSpeechRecognizer underneath). The module is
+// NATIVE, so it exists only in a dev-client/production build — never in
+// Expo Go. Guarded require: in Expo Go `Speech` is null, the mic button hides,
+// and the keyboard's own dictation key (also SFSpeechRecognizer) still works.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let Speech: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  Speech = require("expo-speech-recognition");
+} catch {
+  Speech = null;
+}
+const speechAvailable = (): boolean => {
+  try {
+    return Boolean(Speech?.ExpoSpeechRecognitionModule?.isRecognitionAvailable?.());
+  } catch {
+    return false;
+  }
+};
 import { supabase } from "@/lib/supabase";
 import { logEvent } from "@/lib/events";
 import { colors, fonts, spacing, radii } from "@/lib/theme";
@@ -45,6 +66,40 @@ export function CaptureBar({ compact = false, sourceView = "capture", onRouted }
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<RouteResult | null>(null);
+  const [listening, setListening] = useState(false);
+  const canSpeak = speechAvailable();
+
+  useEffect(() => {
+    if (!canSpeak) return;
+    const mod = Speech.ExpoSpeechRecognitionModule;
+    const subs = [
+      mod.addListener("result", (e: { results: { transcript: string }[] }) => {
+        const t = e.results?.[0]?.transcript;
+        if (t) setText(t);
+      }),
+      mod.addListener("end", () => setListening(false)),
+      mod.addListener("error", () => setListening(false)),
+    ];
+    return () => subs.forEach((s) => s?.remove?.());
+  }, [canSpeak]);
+
+  async function toggleListening() {
+    const mod = Speech?.ExpoSpeechRecognitionModule;
+    if (!mod) return;
+    if (listening) {
+      mod.stop();
+      return;
+    }
+    const perm = await mod.requestPermissionsAsync();
+    if (!perm?.granted) {
+      Alert.alert("Microphone", "Allow microphone + speech recognition in Settings to speak your captures.");
+      return;
+    }
+    logEvent("voice_capture_started", { source_view: sourceView });
+    setListening(true);
+    // REQ-F24: on-device, no external API — requiresOnDeviceRecognition enforces it.
+    mod.start({ lang: "en-GB", interimResults: true, requiresOnDeviceRecognition: true, continuous: false });
+  }
 
   async function route(body: Record<string, unknown>): Promise<RouteResult | null> {
     const { data, error } = await supabase.functions.invoke<RouteResult>("route_capture", { body });
@@ -111,6 +166,15 @@ export function CaptureBar({ compact = false, sourceView = "capture", onRouted }
             ...(compact ? { flex: 1 } : { minHeight: 110, textAlignVertical: "top" as const }),
           }}
         />
+        {canSpeak && (
+          <TouchableOpacity
+            onPress={toggleListening}
+            disabled={busy}
+            style={{ borderWidth: 1, borderColor: listening ? colors.gold : colors.goldDeep, backgroundColor: listening ? colors.surfaceRaised : colors.surface, borderRadius: radii.md, padding: compact ? spacing.sm : spacing.md, alignItems: "center", justifyContent: "center", ...(compact ? {} : { marginTop: spacing.md }) }}
+          >
+            <Text style={{ fontSize: compact ? 16 : 20 }}>{listening ? "⏹" : "🎙"}</Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           disabled={busy || !text.trim()}
           onPress={submit}
