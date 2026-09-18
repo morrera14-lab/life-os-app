@@ -20,6 +20,27 @@ export function CareerModule({ domainId }: { domainId: string }) {
   const [kind, setKind] = useState<(typeof KINDS)[number]>("win");
   const [title, setTitle] = useState(""); const [summary, setSummary] = useState("");
   const [showStale, setShowStale] = useState(false);
+  const [notes, setNotes] = useState(""); const [proposal, setProposal] = useState<{ title: string; summary: string; occurred_on: string; actions: string[] } | null>(null); const [structuring, setStructuring] = useState(false);
+
+  // APP-056: notes → proposal (server structures, writes nothing) → confirm writes.
+  async function structure() {
+    if (!notes.trim() || structuring) return;
+    setStructuring(true);
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase.functions.invoke<{ proposal: typeof proposal }>("meeting_to_record", { body: { notes, today } });
+    setStructuring(false);
+    if (error || !data?.proposal) return;
+    setProposal(data.proposal);
+    logEvent("meeting_structured", { source_view: "career" });
+  }
+  async function confirmProposal() {
+    if (!proposal) return;
+    const { data } = await supabase.auth.getUser(); const uid = data.user?.id; if (!uid) return;
+    const summary = proposal.summary + (proposal.actions?.length ? `\n\nActions: ${proposal.actions.join(" · ")}` : "");
+    await supabase.from("outcome_records").insert({ user_id: uid, domain_id: domainId, kind: "meeting", title: proposal.title, summary, occurred_on: proposal.occurred_on || undefined });
+    logEvent("outcome_recorded", { source_view: "career", metadata: { kind: "meeting", from: "notes" } });
+    setProposal(null); setNotes(""); load();
+  }
 
   const load = useCallback(async () => {
     const [{ data: r }, { data: t }] = await Promise.all([
@@ -71,6 +92,26 @@ export function CareerModule({ domainId }: { domainId: string }) {
       <TouchableOpacity onPress={add} disabled={!title.trim()} style={{ backgroundColor: colors.gold, borderRadius: radii.sm, padding: spacing.sm, alignItems: "center", opacity: title.trim() ? 1 : 0.5 }}>
         <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.bg }}>Record</Text>
       </TouchableOpacity>
+
+      <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 14, color: colors.goldSoft, marginTop: spacing.lg, marginBottom: spacing.xs }}>Or paste meeting notes</Text>
+      <TextInput value={notes} onChangeText={setNotes} placeholder="Raw notes — attendees, what was said, decisions, actions" placeholderTextColor={colors.textMuted} multiline
+        style={{ fontFamily: fonts.body, fontSize: 14, color: colors.text, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.goldDeep, borderRadius: radii.sm, padding: spacing.sm, marginBottom: spacing.xs, minHeight: 80, textAlignVertical: "top" }} />
+      <TouchableOpacity onPress={structure} disabled={!notes.trim() || structuring} style={{ borderWidth: 1, borderColor: colors.gold, borderRadius: radii.sm, padding: spacing.sm, alignItems: "center", opacity: notes.trim() && !structuring ? 1 : 0.5 }}>
+        <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.gold }}>{structuring ? "Structuring…" : "Propose a record"}</Text>
+      </TouchableOpacity>
+      {proposal && (
+        <View style={{ backgroundColor: colors.surface, borderRadius: radii.md, borderWidth: 1, borderColor: colors.goldSoft, padding: spacing.md, marginTop: spacing.sm }}>
+          <Text style={{ fontFamily: fonts.bodyItalic, fontSize: 12, color: colors.textMuted }}>Proposed — nothing saved yet</Text>
+          <Text style={{ fontFamily: fonts.bodyMedium, fontSize: 15, color: colors.text, marginTop: 2 }}>🗒 {proposal.title}</Text>
+          <Text style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textSecondary, marginTop: 2 }}>{proposal.summary}</Text>
+          {proposal.actions?.map((a, i) => <Text key={i} style={{ fontFamily: fonts.body, fontSize: 13, color: colors.text }}>· {a}</Text>)}
+          <Text style={{ fontFamily: fonts.bodyItalic, fontSize: 12, color: colors.textMuted, marginTop: 2 }}>{proposal.occurred_on}</Text>
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+            <TouchableOpacity onPress={confirmProposal} style={{ flex: 1, backgroundColor: colors.gold, borderRadius: radii.sm, padding: spacing.sm, alignItems: "center" }}><Text style={{ fontFamily: fonts.bodyMedium, color: colors.bg }}>Record it</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setProposal(null)} style={{ flex: 1, borderWidth: 1, borderColor: colors.goldDeep, borderRadius: radii.sm, padding: spacing.sm, alignItems: "center" }}><Text style={{ fontFamily: fonts.bodyMedium, color: colors.text }}>Discard</Text></TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       <Text style={{ fontFamily: fonts.display, fontSize: 16, color: colors.goldBright, marginTop: spacing.lg, marginBottom: spacing.sm }}>Live</Text>
       {live.length === 0 ? <Text style={{ fontFamily: fonts.bodyItalic, fontSize: 14, color: colors.textSecondary }}>Nothing live.</Text> :

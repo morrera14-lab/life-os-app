@@ -2,12 +2,13 @@
 // + Privacy & data (APP-021): analytics consent toggle (REQ-F69 — a change is a
 // NEW ledger row, never an edit) and the REQ-F70 delete-my-data path.
 import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, Switch, Alert, ActivityIndicator } from "react-native";
+import { View, Text, TouchableOpacity, Switch, Alert, ActivityIndicator, ScrollView } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "@/lib/supabase";
 import { FeedbackModal } from "@/components/FeedbackModal";
 import { colors, fonts, spacing, radii } from "@/lib/theme";
 import { POLICY_VERSION, consentFlagKey } from "../consent";
+import { ProfileSection } from "@/components/ProfileSection";
 
 export default function Settings() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -88,7 +89,7 @@ export default function Settings() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg, padding: spacing.lg }}>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.bg }} contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing.xl * 2 }}>
       <TouchableOpacity
         onPress={() => setFeedbackOpen(true)}
         style={{ backgroundColor: colors.surface, borderRadius: radii.md, borderWidth: 1, borderColor: colors.goldDeep, padding: spacing.md, marginBottom: spacing.md }}
@@ -137,11 +138,9 @@ export default function Settings() {
         )}
       </TouchableOpacity>
 
-      <Text style={{ fontFamily: fonts.bodyItalic, fontSize: 14, color: colors.textMuted, marginTop: spacing.lg }}>
-        Briefing time, intentions, and check-in preferences arrive with the Sep build.
-      </Text>
+      <ProfileSection />
 
       <FeedbackModal visible={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
-    </View>
+    </ScrollView>
   );
 }

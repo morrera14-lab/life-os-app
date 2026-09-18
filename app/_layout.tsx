@@ -28,6 +28,7 @@ import { initSentry, checkCrashAndPrompt, Sentry } from "@/lib/sentry";
 import { supabase } from "@/lib/supabase";
 import { colors } from "@/lib/theme";
 import { POLICY_VERSION, consentFlagKey } from "./consent";
+import { onboardedFlagKey } from "./onboarding";
 
 initSentry();
 
@@ -44,6 +45,7 @@ function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [consentStatus, setConsentStatus] = useState<"unknown" | "ok" | "needed">("unknown");
+  const [onboardStatus, setOnboardStatus] = useState<"unknown" | "ok" | "needed">("unknown");
   const segments = useSegments();
   const router = useRouter();
 
@@ -105,6 +107,32 @@ function RootLayout() {
     };
   }, [session?.user?.id]);
 
+  // Onboarding gate (APP-050) — after consent; profiles.onboarded_at is truth,
+  // a per-user device flag short-circuits it. Existing accounts were stamped
+  // by migration 18, so only genuinely new users see the flow.
+  useEffect(() => {
+    if (!session || consentStatus !== "ok") {
+      setOnboardStatus("unknown");
+      return;
+    }
+    let cancelled = false;
+    const uid = session.user.id;
+    (async () => {
+      try {
+        if ((await AsyncStorage.getItem(onboardedFlagKey(uid))) === "1") {
+          if (!cancelled) setOnboardStatus("ok");
+          return;
+        }
+      } catch { /* fall through */ }
+      const { data } = await supabase.from("profiles").select("onboarded_at").eq("id", uid).maybeSingle();
+      if (cancelled) return;
+      const ok = Boolean(data?.onboarded_at);
+      if (ok) { try { await AsyncStorage.setItem(onboardedFlagKey(uid), "1"); } catch { /* cache only */ } }
+      setOnboardStatus(ok ? "ok" : "needed");
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id, consentStatus]);
+
   useEffect(() => {
     if (!authReady) return;
     const seg = segments[0] as string | undefined;
@@ -127,9 +155,15 @@ function RootLayout() {
         .catch(() => router.replace("/consent"));
     }
     if (session && consentStatus === "ok" && seg === "consent") router.replace("/");
-  }, [session, authReady, segments, consentStatus]);
+    if (session && consentStatus === "ok" && onboardStatus === "needed" && seg !== "onboarding") {
+      AsyncStorage.getItem(onboardedFlagKey(session.user.id))
+        .then((f) => { if (f === "1") setOnboardStatus("ok"); else router.replace("/onboarding"); })
+        .catch(() => router.replace("/onboarding"));
+    }
+    if (session && onboardStatus === "ok" && seg === "onboarding") router.replace("/");
+  }, [session, authReady, segments, consentStatus, onboardStatus]);
 
-  if (!fontsLoaded || !authReady || (session && consentStatus === "unknown")) {
+  if (!fontsLoaded || !authReady || (session && consentStatus === "unknown") || (session && consentStatus === "ok" && onboardStatus === "unknown")) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator color={colors.gold} />

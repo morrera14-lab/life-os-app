@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { logEvent } from "@/lib/events";
 import { CaptureBar, localISODate } from "@/components/CaptureBar";
 import { DecisionsFold } from "@/components/DecisionsFold";
+import { getFacts, activeTrip } from "@/lib/profileFacts";
 import { colors, fonts, spacing, radii } from "@/lib/theme";
 
 type Task = {
@@ -69,6 +70,7 @@ export default function Home() {
   const [now, setNow] = useState(Date.now());
   const [prompt3, setPrompt3] = useState<string | null>(null); // task id showing 3rd-day prompt
   const [firstName, setFirstName] = useState<string>("");
+  const [tripCity, setTripCity] = useState<string | null>(null);
   const today = localISODate();
   const loadedRef = useRef(false);
   const router = useRouter();
@@ -124,6 +126,7 @@ export default function Home() {
       supabase.from("profiles").select("display_name").maybeSingle()
         .then(({ data }) => setFirstName((data?.display_name ?? "").split(" ")[0]))
         .then(undefined, () => {});
+      getFacts(["trip"]).then((f) => setTripCity(activeTrip(f, today)?.city ?? null)).catch(() => {});
       AsyncStorage.getItem("home_mode")
         .then((m) => {
           if (m === "list" || m === "feed") setMode(m);
@@ -267,6 +270,7 @@ export default function Home() {
         {/* Greeting — UI patterns #2/#5 (APP-044): the day opens with a person, not a list */}
         <Text style={{ fontFamily: fonts.display, fontSize: 22, color: colors.goldBright, marginTop: spacing.md }}>
           {(() => { const h = new Date().getHours(); const g = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; return firstName ? `${g}, ${firstName}` : g; })()}
+          {tripCity ? <Text style={{ fontFamily: fonts.bodyItalic, fontSize: 14, color: colors.textSecondary }}>  · in {tripCity}</Text> : null}
         </Text>
 
         {/* Cockpit strip — REQ-F60 */}

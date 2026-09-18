@@ -7,6 +7,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
 import { useLocalSearchParams } from "expo-router";
 import { supabase } from "@/lib/supabase";
 import { logEvent } from "@/lib/events";
+import { getFacts } from "@/lib/profileFacts";
 import { colors, fonts, spacing, radii } from "@/lib/theme";
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -26,7 +27,12 @@ export default function ManagerChat() {
       .select("name,icon")
       .eq("id", domainId)
       .maybeSingle()
-      .then(({ data }) => setDomainName(data ? `${data.icon ?? ""} ${data.name} Manager`.trim() : "Manager"));
+      .then(async ({ data }) => {
+        // APP-051: a personalised manager name from the facts store, else the default.
+        const facts = await getFacts([`manager.${domainId}.name`]);
+        const custom = facts[`manager.${domainId}.name`] as string | undefined;
+        setDomainName(custom ? `${data?.icon ?? ""} ${custom}`.trim() : data ? `${data.icon ?? ""} ${data.name} Manager`.trim() : "Manager");
+      });
   }, [domainId]);
 
   async function send() {

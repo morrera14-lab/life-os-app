@@ -13,6 +13,7 @@ import { FaithModule } from "@/components/modules/FaithModule";
 import { HealthModule } from "@/components/modules/HealthModule";
 import { LearningModule } from "@/components/modules/LearningModule";
 import { CareerModule } from "@/components/modules/CareerModule";
+import { FinancesModule } from "@/components/modules/FinancesModule";
 
 type Domain = { id: string; name: string; icon: string | null };
 
@@ -40,6 +41,7 @@ export default function DomainDetail() {
     name === "health" ? <HealthModule /> :
     name === "learning" ? <LearningModule /> :
     name === "career" ? <CareerModule domainId={domain.id} /> :
+    name === "finances" ? <FinancesModule /> :
     <GenericDomain domainId={domain.id} />;
 
   return (
