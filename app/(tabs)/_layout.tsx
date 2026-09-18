@@ -23,6 +23,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: "Today", tabBarIcon: icon("☀") }} />
       <Tabs.Screen name="capture" options={{ title: "Capture", tabBarIcon: icon("✎") }} />
+      <Tabs.Screen name="domains" options={{ title: "Domains", tabBarIcon: icon("◈") }} />
       <Tabs.Screen name="habits" options={{ title: "Habits", tabBarIcon: icon("▦") }} />
       <Tabs.Screen name="settings" options={{ title: "Settings", tabBarIcon: icon("⚙") }} />
     </Tabs>
